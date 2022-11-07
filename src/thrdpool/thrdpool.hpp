@@ -48,23 +48,23 @@ class Thrdpool {
   [[nodiscard]] std::future<R> Submit(F&& task, A&&... args) {
     std::function<R()> task_handle =
         std::bind(std::forward<F>(task), std::forward<A>(args)...);
-    std::promise<R> task_promise;
+    auto task_promise = std::make_shared<std::promise<R>>();
     PushTask([task_handle, task_promise] {
       try {
         if constexpr (std::is_void_v<R>) {
           std::invoke(task_handle);
-          task_promise.set_value();
+          task_promise->set_value();
         } else {
-          task_promise.set_value(std::invoke(task_handle));
+          task_promise->set_value(std::invoke(task_handle));
         }
       } catch (...) {
         try {
-          task_promise.set_exception(std::current_exception());
+          task_promise->set_exception(std::current_exception());
         } catch (...) {
         }
       }
     });
-    return task_promise.get_future();
+    return task_promise->get_future();
   }
 
   void Exec() { worker_available_cv_.notify_all(); }
@@ -110,10 +110,8 @@ class Thrdpool {
       std::function<void()> task;
       std::unique_lock<std::mutex> locker(mtx_);
       // only allow to weakup when has task and thrdpool is runable
-      worker_available_cv_.wait(locker, [this] {
-        std::cout << "[DEBUG]" << !taskpool_.empty() << std::endl;
-        return !taskpool_.empty() || !working();
-      });
+      worker_available_cv_.wait(
+          locker, [this] { return !taskpool_.empty() || !working(); });
       if (working()) {
         task = std::move(taskpool_.front());
         taskpool_.pop();
